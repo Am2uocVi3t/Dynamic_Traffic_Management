@@ -12,16 +12,32 @@ REFERENCE_FOLDER = os.path.abspath(REFERENCE_FOLDER)
 INPUT_FOLDER = os.path.abspath(INPUT_FOLDER)
 
 
-def find_reference_image(flow_type, time_of_day, lane):
+def find_reference_image(flow_type, time_of_day, lane, input_image):
     ref_path = os.path.join(REFERENCE_FOLDER, flow_type, time_of_day)
 
     if not os.path.exists(ref_path):
         print_error("Reference folder not found: " + ref_path)
         return None
 
+    best_score = -float("inf")
+    best_ref_image = None
+
     for filename in os.listdir(ref_path):
         if filename.endswith(".jpg") and lane in filename:
-            return os.path.join(ref_path, filename)
+            ref_image_path = os.path.join(ref_path, filename)
+            ref_image = Image.open(ref_image_path).convert("L")
+
+            score = compare_images(input_image, ref_image)
+
+            if score > best_score:
+                best_score = score
+                best_ref_image = ref_image_path
+
+    if best_ref_image:
+        print_success(f"Best Image in {flow_type} and {time_of_day} is: {best_ref_image} | Score: {best_score}")
+        return best_ref_image
+    else:
+        print_warning(f"Can not find valid Image in: {ref_path}")
 
     print_error("Invalid reference image")
     return None
@@ -52,7 +68,12 @@ def split_image(image_path):
 
 
 def compare_images(input_path, ref_path):
-    ref_image = Image.open(ref_path).convert("L")
+
+    if isinstance(ref_path, str):
+        ref_image = Image.open(ref_path).convert("L")
+    else:
+        ref_image = ref_path.convert("L")
+
     input_image = input_path.convert("L")
     input_image = input_image.resize(ref_image.size)
 
@@ -77,8 +98,8 @@ def determine_traffic_level(input_image, time_of_day):
     }
 
     for level in ["low", "mid", "high"]:
-        ref_left = find_reference_image(f"{level}_flow", time_of_day, "left")
-        ref_right = find_reference_image(f"{level}_flow", time_of_day, "right")
+        ref_left = find_reference_image(f"{level}_flow", time_of_day, "left", left_image)
+        ref_right = find_reference_image(f"{level}_flow", time_of_day, "right", right_image)
 
         if ref_left:
             scores["left"][level] = compare_images(left_image, ref_left)
