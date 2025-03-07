@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from PIL import Image
+from datetime import datetime
 from utils.message import *
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -11,23 +12,48 @@ REFERENCE_FOLDER = os.path.abspath(REFERENCE_FOLDER)
 INPUT_FOLDER = os.path.abspath(INPUT_FOLDER)
 
 
+def find_reference_image(flow_type, time_of_day, lane):
+    ref_path = os.path.join(REFERENCE_FOLDER, flow_type, time_of_day)
+
+    if not os.path.exists(ref_path):
+        print_error("Reference folder not found: " + ref_path)
+        return None
+
+    for filename in os.listdir(ref_path):
+        if filename.endswith(".jpg") and lane in filename:
+            return os.path.join(ref_path, filename)
+
+    print_error("Invalid reference image")
+    return None
+
+
+def classify_time_of_day(filename):
+    try:
+        timestamp = int(filename.split("_")[1].split(".")[0])
+        hour = datetime.fromtimestamp(timestamp / 1000).hour
+        if 6 <= hour < 18:
+            return "day"
+        else:
+            return "night"
+
+    except Exception as e:
+        print_error(e)
+        return None
+
+
 def split_image(image_path):
     image = Image.open(image_path)
     width, height = image.size
 
-    left_lane_path = "left_image.jpg"
-    right_lane_path = "right_image.jpg"
+    left_image = image.crop((0, 0, width // 2, height))
+    right_image = image.crop((width // 2, 0, width, height))
 
-    image.crop((0, 0, width // 2, height)).save(left_lane_path)
-    image.crop((width // 2, 0, width, height)).save(right_lane_path)
-
-    return left_lane_path, right_lane_path
+    return left_image, right_image
 
 
 def compare_images(input_path, ref_path):
-    input_image = Image.open(input_path).convert("L")
     ref_image = Image.open(ref_path).convert("L")
-
+    input_image = input_path.convert("L")
     input_image = input_image.resize(ref_image.size)
 
     input_image_arr = np.array(input_image)
@@ -39,43 +65,46 @@ def compare_images(input_path, ref_path):
     return round(score, 2)
 
 
-def determine_traffic_level(input_image):
+def determine_traffic_level(input_image, time_of_day):
     def normalize_scores(score_dict):
         total = sum(score_dict.values())
         return {key: round((value / total) * 100, 2) if total > 0 else 0 for key, value in score_dict.items()}
 
-    reference_images = {
-        "low": os.path.join(REFERENCE_FOLDER, "low_flow.jpg"),
-        "mid": os.path.join(REFERENCE_FOLDER, "mid_flow.jpg"),
-        "high": os.path.join(REFERENCE_FOLDER, "high_flow.jpg")
+    left_image, right_image = split_image(input_image)
+    scores = {
+        "left": {},
+        "right": {}
     }
 
-    left_image, right_image = split_image(input_image)
-    scores = {"left": {}, "right": {}}
+    for level in ["low", "mid", "high"]:
+        ref_left = find_reference_image(f"{level}_flow", time_of_day, "left")
+        ref_right = find_reference_image(f"{level}_flow", time_of_day, "right")
 
-    for level, ref_image in reference_images.items():
-        if os.path.exists(ref_image):
-            scores["left"][level] = compare_images(left_image, ref_image)
-            scores["right"][level] = compare_images(right_image, ref_image)  # code so sánh bức ảnh input và ảnh mẫu
+        if ref_left:
+            scores["left"][level] = compare_images(left_image, ref_left)
+
+        if ref_right:
+            scores["right"][level] = compare_images(right_image, ref_right)
 
     left_scores = normalize_scores(scores["left"])
     right_scores = normalize_scores(scores["right"])
 
-    left_flow = max(left_scores, key=left_scores.get)
-    right_flow = max(right_scores, key=right_scores.get)
+    left_flow = max(left_scores, key=left_scores.get, default="unknown")
+    right_flow = max(right_scores, key=right_scores.get, default="unknown")
 
     return left_flow, right_flow, left_scores, right_scores
 
 
 if __name__ == '__main__':
-    input_image = os.path.abspath(os.path.join(INPUT_FOLDER, "input_image.jpg"))  # Cần thêm tên đường dẫn file ảnh input
+    for filename in os.listdir(INPUT_FOLDER):
+        if filename.lower().endswith(".jpg"):
+            image_path = os.path.join(INPUT_FOLDER, filename)
 
-    if not os.path.exists(input_image):
-        print_error("Error input image")
-    else:
+            time_of_day = classify_time_of_day(filename)
+            if time_of_day in ["day", "night"]:
+                print_success("Processing: " + filename + " | Time: " + time_of_day)
 
-        left_flow, right_flow, left_score, right_score = determine_traffic_level(input_image)
-        print_warning("Left Lane Flow: " + left_flow.upper())
-        print_warning("Left Lane Score: " + str(left_score))
-        print_warning("Right Lane Score: " + right_flow.upper())
-        print_warning("Right Lane Score: " + str(right_score))
+                left_flow, right_flow, left_score, right_score = determine_traffic_level(image_path, time_of_day)
+
+                print_warning("Left Lane Flow: " + left_flow + " | " + " Score: " + str(left_score))
+                print_warning("Right Lane Flow: " + right_flow + " | " + " Score: " + str(right_score))
